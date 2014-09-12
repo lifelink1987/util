@@ -1,0 +1,37 @@
+{
+  "private": "true",
+  "name": "life-link-util",
+  "description": "Life-Link Friendschip-Schools utility belt",
+  "keywords": [],
+  "version": "0.0.1",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/lifelink1987/util.git"
+  },
+  "licenses": [
+    {
+      "type": "Unlicense",
+      "url": "http://unlicense.org/UNLICENSE"
+    }
+  ],
+  "bin": {},
+  "scripts": {
+    "prepublish": "make prepublish",
+    "test": "make test"
+  },
+  "dependencies": {},
+  "optionalDependencies": {
+    "coffee-script": "~1.8.0"
+  },
+  "devDependencies": {
+    "chai": "~1.9.1",
+    "coffeelint": "~1.6.0",
+    "lodash": "~2.4.1",
+    "mocha": "~1.21.4",
+    "testem": "~0.6.18"
+  },
+  "publishConfig": {
+    "bin": {},
+    "optionalDependencies": {}
+  }
+}
