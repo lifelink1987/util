@@ -1,0 +1,274 @@
+#!/usr/bin/env coffee
+
+config = require(__dirname + '/../package.json').config
+_ = require 'lodash'
+async = require 'async'
+mysql = require 'mysql'
+natural = require 'natural'
+
+format = process.argv[2]
+
+db = mysql.createConnection {
+  host: config.mysql.host
+  user: config.mysql.user
+  password: config.mysql.password
+  database: config.mysql.database
+}
+
+connected = (_foo, next) ->
+  next()
+
+query_schools = (next) ->
+  db.query "SELECT
+              member_schools_number
+            , school
+            , city
+            , email
+            , contact_senior
+            , email_contact_senior
+            , contact_junior
+            , email_contact_junior
+            , country_short as country
+            FROM member_schools s
+            JOIN countries_overview c ON c.countries_iso = s.countries_iso_fk
+            ORDER BY s.member_schools_number DESC
+           ", next
+
+query_reports = (next) ->
+  db.query "SELECT
+              member_schools_number
+            , member_reports_id
+            , school
+            , city
+            , contact
+            , email_contact
+            , country_short as country
+            FROM member_reports r
+            JOIN member_schools s ON r.member_schools_number_fk = s.member_schools_number
+            JOIN countries_overview c ON c.countries_iso = s.countries_iso_fk
+            ORDER BY r.member_reports_id DESC
+           ", next
+
+parse_schools = (rows, fields, next) ->
+  all = {
+    better: []
+    contacts: []
+  }
+
+  for row in rows
+    {contacts, better} = parse_school_contacts row
+    all.better.push {school: row.member_schools_number}  if better
+    all.contacts.push contacts
+  all.contacts = _.flatten all.contacts, true
+  next null, all
+
+parse_reports = (rows, fields, next) ->
+  all = {
+    better: []
+    contacts: []
+  }
+
+  for row in rows
+    {contacts, better} = parse_report_contacts row
+    all.better.push {report: row.member_reports_id}  if better
+    all.contacts.push contacts
+  all.contacts = _.flatten all.contacts, true
+  next null, all
+
+
+handle_results = ({contacts, better}, next) ->
+  contacts = _.filter contacts, 'email'
+  # contacts = _.uniq contacts, 'email'
+  contacts = _.sortBy contacts, 'email'
+  console.log [
+    'name'
+    'email'
+    'school_number'
+    'school'
+    'city'
+    'country'
+  ].join "\t"
+  for contact in contacts
+    contact = _.transform contact, (result, v = '', k) ->
+      result[k] = _.escape v
+
+    console.log [
+      contact.name or ''
+      contact.email or ''
+      contact.school_number
+      contact.school
+      contact.city or ''
+      contact.country
+    ].join "\t"
+
+  next()
+
+async.waterfall [
+  (next) -> db.connect next
+  connected
+  query_schools
+  parse_schools
+  (results, next) ->
+    async.waterfall [
+      query_reports
+      parse_reports
+      ({contacts, better}, next) ->
+        results.contacts = results.contacts.concat contacts
+        results.better = results.better.concat better
+        next null, results
+    ], next
+  handle_results
+  (next) -> db.end next
+], (err) ->
+  throw err  if err?
+
+# HELPERS
+
+parse_school_contacts = (row) ->
+  contacts = []
+  better = false
+  contacts.push {
+    contact: row.school
+    name: row.school
+    email: row.email
+    school_number: row.member_schools_number
+    school: row.school
+    city: row.city
+    country: row.country
+  }
+  for type in ['senior', 'junior']
+    ces = parse_contact_and_email row["contact_#{type}"], row["email_contact_#{type}"]
+    for ce, i in ces
+      ces[i] = _.merge {}, ces[i].contact, {
+        email: ces[i].email
+        school_number: row.member_schools_number
+        school: row.school
+        city: row.city
+        country: row.country
+      }
+    contacts = contacts.concat ces
+    better = better or better_member_distances ces
+  {contacts, better}
+
+parse_report_contacts = (row) ->
+  contacts = []
+  better = false
+  ces = parse_contact_and_email row.contact, row.email_contact
+  for ce, i in ces
+    ces[i] = _.merge {}, ces[i].contact, {
+      email: ces[i].email
+      school_number: row.member_schools_number
+      school: row.school
+      city: row.city
+      country: row.country
+    }
+  contacts = contacts.concat ces
+  better = better or better_member_distances ces
+  {contacts, better}
+
+split = (csv) ->
+  csv = csv.split /,/
+  token = token.trim()  for token in csv
+  csv
+
+parse_contact_and_email = (contact = "", email = "") ->
+  contact = split contact
+  email = split email
+  assoc_contact_and_email contact, email
+
+assoc_contact_and_email = (contact, email) ->
+  # FIXME
+  ces = _.zip contact, email
+  for ce, i in ces
+    unless ces[i][0]?.length
+      ces[i] = undefined
+      continue
+    ces[i][0] = parse_contact ces[i][0]
+    ces[i][1] = parse_email ces[i][1]
+    ces[i] = _.zipObject ['contact', 'email'], ces[i]
+  ces = _.compact ces
+
+  ces
+
+calc_distances = (ces) ->
+  distances = []
+  for ce1, i1 in ces
+    for ce2, i2 in ces
+      name1 = ce1.name.replace(' ', '.').toLowerCase()
+      name2 = ce2.name.replace(' ', '.').toLowerCase()
+      email_username = (ce2.email or '').split('@').shift()?.toLowerCase() or ''
+      value = [0, 1]
+      if name1 isnt '? ?' and email_username isnt ''
+        #value[0] = natural.JaroWinklerDistance name1, email_username
+        #value[1] = natural.JaroWinklerDistance name2, email_username
+        value[0] = Math.abs(1 - (natural.LevenshteinDistance(name1, email_username) / email_username.length))
+        value[1] = Math.abs(1 - (natural.LevenshteinDistance(name2, email_username) / email_username.length))
+      distances.push {
+        a: [i1, ce1]
+        b: [i2, ce2]
+        name1
+        name2
+        email_username
+        email: ce2.email
+        value
+      }
+  distances
+
+better_distances = (ces) ->
+  threshold = 0.5
+  threshold_keep = 0.9
+  distances = calc_distances ces
+  better = []
+  for ce, i in ces
+    for d in distances
+      continue  unless d.a[0] is i
+      ref_value = d.value[0]
+
+    for d in distances
+      continue  if d.a[0] is d.b[0]
+      continue  if d.value[0] < threshold
+      continue  if d.value[0] < ref_value
+      continue  if d.value[0] < ref_value
+      continue  if d.value[1] > threshold_keep
+      better.push d
+  better
+
+better_member_distances = (ces) ->
+  better = better_distances ces
+  if better.length
+    true
+  else
+    false
+
+parse_contact = (contact) ->
+  tokens = contact.trim().split /[ \.]+/
+  token = token.trim()  for token in tokens
+  title = '?'
+  title = normalize_title tokens.shift()  while is_title tokens[0]
+  last_name = tokens.pop()
+  first_name = tokens[0]
+  first_names = tokens.join ' '
+
+  first_name = if first_name?.length then first_name else '?'
+  first_names = if first_names?.length then first_names else first_name
+  last_name = if last_name?.length then last_name else '?'
+
+  {
+    contact
+    title
+    name: [first_names, last_name].join ' '
+    first_name
+    first_names
+    last_name
+  }
+
+is_title = (token) ->
+  /^mrs|mr|ms\.?$/i.test token
+
+normalize_title = (title) ->
+  title = 'Ms.'  if /^mr?s\.?$/i.test title
+  title = 'Mr.'  if /^mr\.?$/i.test title
+  title
+
+parse_email = (email = '') ->
+  email.trim()

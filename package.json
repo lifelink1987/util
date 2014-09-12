@@ -19,19 +19,31 @@
     "prepublish": "make prepublish",
     "test": "make test"
   },
-  "dependencies": {},
+  "dependencies": {
+    "async": "^0.9.0",
+    "lodash": "~2.4.1",
+    "mysql": "~2.5.0",
+    "natural": "^0.1.28"
+  },
   "optionalDependencies": {
     "coffee-script": "~1.8.0"
   },
   "devDependencies": {
     "chai": "~1.9.1",
     "coffeelint": "~1.6.0",
-    "lodash": "~2.4.1",
     "mocha": "~1.21.4",
     "testem": "~0.6.18"
   },
   "publishConfig": {
     "bin": {},
     "optionalDependencies": {}
+  },
+  "config": {
+    "mysql": {
+      "host": "",
+      "user": "",
+      "password": "",
+      "database": ""
+    }
   }
 }
